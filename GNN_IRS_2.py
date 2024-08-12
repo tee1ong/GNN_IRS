@@ -69,6 +69,24 @@ def steering_vector_irs(phi_3_k, theta_3_k, m, n, d_irs, lambda_c):
     exponent = 2j * np.pi * d_irs / lambda_c * (i1 * np.sin(phi_3_k) * np.cos(theta_3_k) + i2 * np.sin(theta_3_k))
     return np.exp(exponent)
 
+# Function to calculate angles between BS and IRS
+def calculate_bs_irs_angles(bs_loc, irs_loc, d_bi):
+    # Azimuth and elevation angles for BS to IRS
+    phi_1 = np.arctan2(irs_loc[1] - bs_loc[1], irs_loc[0] - bs_loc[0])
+    theta_1 = np.arctan2(irs_loc[2] - bs_loc[2], d_bi)
+    
+    # Azimuth and elevation angles for IRS to BS
+    phi_2 = np.arctan2(bs_loc[1] - irs_loc[1], bs_loc[0] - irs_loc[0])
+    theta_2 = np.arctan2(bs_loc[2] - irs_loc[2], d_bi)
+
+    return phi_1, theta_1, phi_2, theta_2
+
+# Function to calculate BS steering vector
+def steering_vector_bs(phi_1, theta_1, n_bs, d_bs, lambda_c):
+    n = np.arange(n_bs)  # Array of BS antenna indices
+    exponent = 2j * np.pi * n * d_bs / lambda_c * np.cos(phi_1) * np.cos(theta_1)
+    return np.exp(exponent)
+
 # Generates direct channel coefficients
 def direct_channel(n_ue, n_uet, n_bs, beta_0):
     
@@ -115,6 +133,9 @@ def IRS_UE_channel(n_ue, n_uet, n_irs, beta_1, epsilon, phi_3_k, theta_3_k, d_ir
         hkr[k, :, :] = beta_1[k] * (hkr_los[k, :, :] + hkr_nlos[k, :, :])
     
     return hkr
+
+# BS-IRS channel coefficient
+def BS_IRS_channel(n_irs, n_bs, beta_2, epsilon )
         
     
 # Simulation
@@ -158,5 +179,6 @@ phi_3_k, theta_3_k = calculate_angles(ue_loc, irs_loc, d_iu) # azimuth and eleva
 #         for n in range(n_irs):  # For each IRS element
 #             a_irs[k, m, n] = steering_vector_irs(phi_3_k[k], theta_3_k[k], m, n, d_irs, lambda_c)
 hkr = IRS_UE_channel(n_ue, n_uet, n_irs, pl_iu, epsilon, phi_3_k, theta_3_k, d_irs, lambda_c)
+
 
         

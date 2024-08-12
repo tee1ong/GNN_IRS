@@ -35,6 +35,9 @@ for k in range(n_ue):
     d_bu_k = np.linalg.norm(ue_loc[k] - bs_loc)
     d_bu[k] = d_bu_k
 
+<<<<<<< HEAD
+
+=======
 pl_bu = 32 + 36.7 * np.log10(d_bu) # Direct Channel path loss
 
 # IRS-assisted channel path losses 
@@ -72,3 +75,5 @@ a_bs = np.exp(1j * 2 * np.pi * d_irs * np.arange(n_bs) * np.cos(phi_1) * np.cos(
 print("Steering vectors for IRS (for each user):", a_irs)
 print("Steering vector for BS:", a_bs)
 
+
+>>>>>>> a924b792b88fd4e25d60b755e1a04edbf5060b40
