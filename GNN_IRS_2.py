@@ -80,24 +80,41 @@ def direct_channel(n_ue, n_uet, n_bs, beta_0):
     for k in range(n_ue):
         r_part = np.random.randn(n_uet, n_bs)
         i_part = np.random.randn(n_uet, n_bs)
-        h[k,:,:] = ((r_part + 1j * i_part) / np.sqrt(2)) * beta_0[k]
+        h[k, :, :] = ((r_part + 1j * i_part) / np.sqrt(2)) * beta_0[k]
         
     return h
 
-# def BS_IRS_channel(n_ue, n_uet, n_bs, beta_1, epsilon,):
+def IRS_UE_channel(n_ue, n_uet, n_irs, beta_1, epsilon, phi_3_k, theta_3_k, d_irs, lambda_c):
     
-#     if len(beta_1) != n_ue:
-#         raise ValueError(f"Incompatible transmit power vectors")
-        
-#     rician_factor_root = np.sqrt(epsilon / (1 + epsilon))
-            
-#     hkr_nlos = np.zeros(n_ue, n_uet, n_bs, dtype = complex)
-        
-#     for k in range(n_ue):
-        
-#         r_part = np.random.randn(n_uet, n_irs)
-#         i_part = np.random.randn(n_uet, n_irs)
-#         hkr_nlos[k,:,:] = (r_part + 1j * i_part) / np.sqrt(2)
+    if len(beta_1) != n_ue:
+        raise ValueError("Incompatible beta_1 vector size with the number of users")
+    
+    # Compute the Rician factors
+    rician_factor_los = np.sqrt(epsilon / (1 + epsilon))
+    rician_factor_nlos = np.sqrt(1 / (1 + epsilon))
+    
+    # Initialize the channel matrices
+    hkr_nlos = np.zeros((n_ue, n_uet, n_irs), dtype=complex)
+    hkr_los = np.zeros((n_ue, n_uet, n_irs), dtype=complex)
+    
+    # Generate the NLOS component
+    for k in range(n_ue):
+        r_part = np.random.randn(n_uet, n_irs)
+        i_part = np.random.randn(n_uet, n_irs)
+        hkr_nlos[k, :, :] = ((r_part + 1j * i_part) / np.sqrt(2)) * rician_factor_nlos
+    
+    # Generate the LOS component using the steering vectors
+    for k in range(n_ue):  # For each user
+        for m in range(n_uet):  # For each user antenna
+            for n in range(n_irs):  # For each IRS element
+                hkr_los[k, m, n] = steering_vector_irs(phi_3_k[k], theta_3_k[k], m, n, d_irs, lambda_c) * rician_factor_los
+    
+    # Combine the LOS and NLOS components, and apply path loss beta_1
+    hkr = np.zeros((n_ue, n_uet, n_irs), dtype=complex)
+    for k in range(n_ue):
+        hkr[k, :, :] = beta_1[k] * (hkr_los[k, :, :] + hkr_nlos[k, :, :])
+    
+    return hkr
         
     
 # Simulation
@@ -127,17 +144,19 @@ pl_cascaded = pl_bi + pl_iu # total cascaded channel path loss
 
 pl_bu_linear = 10 ** (-pl_bu / 10)  # Linear scale direct channel path loss 
 
-
-
+# Channel coefficients calculation
+# Direct Channel
 hkd = direct_channel(n_ue, n_uet, n_bs, pl_bu_linear)
 
-phi_3_k, theta_3_k = calculate_angles(ue_loc, irs_loc, d_iu)
+# Cascaded channel
+phi_3_k, theta_3_k = calculate_angles(ue_loc, irs_loc, d_iu) # azimuth and elevation angles between IRS and UE 
 
-a_irs = np.zeros((n_ue, n_uet, n_irs,), dtype=complex)
+# a_irs = np.zeros((n_ue, n_uet, n_irs,), dtype=complex) # Steering angles = nlos channel coefficients storage array
 
-for k in range(n_ue):  # For each user
-    for m in range(n_uet):  # For each user antenna
-        for n in range(n_irs):  # For each IRS element
-            a_irs[k, m, n] = steering_vector_irs(phi_3_k[k], theta_3_k[k], m, n, d_irs, lambda_c)
+# for k in range(n_ue):  # For each user
+#     for m in range(n_uet):  # For each user antenna
+#         for n in range(n_irs):  # For each IRS element
+#             a_irs[k, m, n] = steering_vector_irs(phi_3_k[k], theta_3_k[k], m, n, d_irs, lambda_c)
+hkr = IRS_UE_channel(n_ue, n_uet, n_irs, pl_iu, epsilon, phi_3_k, theta_3_k, d_irs, lambda_c)
 
         
