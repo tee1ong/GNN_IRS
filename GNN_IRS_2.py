@@ -25,44 +25,85 @@ d_irs = 0.5  # Distance between IRS elements - presumed
 
 # Function definitions
 
+# Uplink Pilot Transmission
+
+# Generate orthogonal pilot sequences
+def generate_orthogonal_pilots(n_ue, L0):
+    pilots = np.fft.fft(np.eye(L0))[:n_ue].T  # Using DFT to generate orthogonal sequences
+    return pilots
+
+# Simulate the uplink pilot transmission and received signal at BS
+def simulate_pilot_transmission(pilots, combined_channel, n_bs, L0, tau, noise_var):
+    Y = np.zeros((n_bs, L0 * tau), dtype=complex)  # Received signal matrix at BS
+    
+    for t in range(tau):
+        for k in range(n_ue):
+            # Get the pilot sequence for user k
+            pilot_sequence = pilots[:, k].reshape(1, L0)
+            
+            # Apply the combined channel to the pilot sequence
+            received_signal = combined_channel[k, 0, :].reshape(n_bs, 1) @ pilot_sequence
+            
+            # Add the received signal to the corresponding part of Y
+            Y[:, t*L0:(t+1)*L0] += received_signal
+        
+        # Add noise to the received signal
+        Y[:, t*L0:(t+1)*L0] += np.sqrt(noise_var/2) * (np.random.randn(n_bs, L0) + 1j * np.random.randn(n_bs, L0))
+    
+    return Y
+
+# Process the received pilots at the BS to estimate the combined channel
+def process_received_pilots(Y, pilots, L0, tau):
+    F_hat = np.zeros((Y.shape[0], pilots.shape[1]), dtype=complex)  # n_bs x n_ue
+    
+    for t in range(tau):
+        Y_t = Y[:, t*L0:(t+1)*L0]
+        
+        for k in range(pilots.shape[1]):
+            F_hat[:, k] += np.dot(Y_t, np.conj(pilots[:, k]))
+    
+    F_hat /= tau
+    return F_hat
+
+def lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance):
+    """
+    Perform LMMSE channel estimation.
+
+    Y: Received pilot matrix at BS.
+    pilots: Transmitted pilot sequences.
+    noise_var: Noise variance.
+                                                                
+    combined_channel_covariance: Covariance matrix of the combined channel.
+
+    Returns:
+    F_hat_lmmse: LMMSE estimate of the channel matrix.
+    """
+
+    Q = pilots.T @ pilots
+    sigma2 = noise_var
+    
+    # Ensure the covariance matrix is of the correct shape
+    R_y = combined_channel_covariance + sigma2 * np.eye(combined_channel_covariance.shape[0])
+    
+    # Expectation calculations (assuming Gaussian distribution)
+    E_Y = np.mean(Y, axis=1, keepdims=True)  # Mean of Y (along the sub-frames)
+    
+    # LMMSE estimation
+    F_hat_lmmse = np.dot(np.dot(combined_channel_covariance, np.linalg.inv(R_y)), Y - E_Y) + E_Y
+    
+    return F_hat_lmmse
+
+# Downlink Beamforming
+
 # Universal angle calculation function
 def calculate_angles(point_a, point_b):
-    """
-    Calculate the azimuth and elevation angles between two points.
-    
-    point_a: The first point in space (e.g., BS or IRS location).
-    point_b: The second point in space (e.g., IRS or UE location).
-    
-    Returns:
-    - Azimuth angle (phi) and elevation angle (theta).
-    """
-    # Calculate the distance between the two points in 3D space
     d_ab = calculate_distance(point_a, point_b)
-    
-    # Azimuth angle
     phi = np.arctan2(point_b[1] - point_a[1], point_b[0] - point_a[0])
-    
-    # Elevation angle
     theta = np.arctan2(point_b[2] - point_a[2], d_ab)
-    
     return phi, theta
 
 # Universal steering vector function
 def steering_vector(phi, theta, n, d_element, lambda_c, array_type='irs', n_cols=None):
-    """
-    Calculate the steering vector for either IRS or BS.
-    
-    phi: Azimuth angle.
-    theta: Elevation angle.
-    n: Element index.
-    d_element: Distance between array elements (e.g., d_irs or d_bs).
-    lambda_c: Wavelength of the signal.
-    array_type: 'irs' for IRS or 'bs' for BS. Defaults to 'irs'.
-    n_cols: Number of columns in the IRS (required if array_type is 'irs').
-    
-    Returns:
-    - Steering vector (complex exponential).
-    """
     if array_type == 'irs':
         if n_cols is None:
             raise ValueError("n_cols must be provided for IRS steering vector calculation.")
@@ -113,7 +154,6 @@ def calculate_distance(a, b):
 
 # Generates direct channel coefficients
 def direct_channel(n_ue, n_uet, n_bs, beta_0):
-    
     if len(beta_0) != n_ue:
         raise ValueError(f"Incompatible transmit power vectors")
     
@@ -128,32 +168,26 @@ def direct_channel(n_ue, n_uet, n_bs, beta_0):
 
 # IRS-to-UE channel matrix calculation
 def IRS_UE_channel(n_ue, n_uet, n_irs, beta_1, epsilon, irs_loc, ue_loc, d_irs, lambda_c, n_cols):
-    
     if len(beta_1) != n_ue:
         raise ValueError("Incompatible beta_1 vector size with the number of users")
     
-    # Compute the Rician factors
     rician_factor_los = np.sqrt(epsilon / (1 + epsilon))
     rician_factor_nlos = np.sqrt(1 / (1 + epsilon))
     
-    # Initialize the channel matrices
     hkr_nlos = np.zeros((n_ue, n_uet, n_irs), dtype=complex)
     hkr_los = np.zeros((n_ue, n_uet, n_irs), dtype=complex)
     
-    # Generate the NLOS component
     for k in range(n_ue):
         r_part = np.random.randn(n_uet, n_irs)
         i_part = np.random.randn(n_uet, n_irs)
         hkr_nlos[k, :, :] = ((r_part + 1j * i_part) / np.sqrt(2)) * rician_factor_nlos
     
-    # Generate the LOS component using the steering vectors
     for k in range(n_ue):  # For each user
         phi_3_k, theta_3_k = calculate_angles(irs_loc, ue_loc[k])
         for m in range(n_uet):  # For each user antenna
             for n in range(n_irs):  # For each IRS element
                 hkr_los[k, m, n] = steering_vector(phi_3_k, theta_3_k, n, d_irs, lambda_c, array_type='irs', n_cols=n_cols) * rician_factor_los
     
-    # Combine the LOS and NLOS components, and apply path loss beta_1
     hkr = np.zeros((n_ue, n_uet, n_irs), dtype=complex)
     for k in range(n_ue):
         hkr[k, :, :] = beta_1[k] * (hkr_los[k, :, :] + hkr_nlos[k, :, :])
@@ -162,8 +196,6 @@ def IRS_UE_channel(n_ue, n_uet, n_irs, beta_1, epsilon, irs_loc, ue_loc, d_irs, 
 
 # BS-IRS channel matrix calculation
 def BS_IRS_channel(n_irs, n_bs, beta_2, epsilon, bs_loc, irs_loc, d_bs, d_irs, lambda_c, n_cols):
-    
-    # Compute the LOS component
     phi_1, theta_1 = calculate_angles(bs_loc, irs_loc)
     g_los = np.zeros((n_bs, n_irs), dtype=complex)
     for n in range(n_irs):
@@ -172,56 +204,77 @@ def BS_IRS_channel(n_irs, n_bs, beta_2, epsilon, bs_loc, irs_loc, d_bs, d_irs, l
         a_irs = steering_vector(phi_2, theta_2, n, d_irs, lambda_c, array_type='irs', n_cols=n_cols)
         g_los[:, n] = np.outer(a_bs, a_irs.conj()).flatten()
     
-    # Generate the NLOS component
     g_nlos = generate_nlos_component(n_bs, n_irs)
-    
-    # Combine the LOS and NLOS components, and apply path loss beta_2
     g_full = beta_2 * (np.sqrt(epsilon / (1 + epsilon)) * g_los + np.sqrt(1 / (1 + epsilon)) * g_nlos)
     
     return g_full
 
 # Function to generate NLOS component for G
 def generate_nlos_component(n_bs, n_irs):
-    # Generate the NLOS component as a complex Gaussian matrix
     return (np.random.randn(n_bs, n_irs) + 1j * np.random.randn(n_bs, n_irs)) / np.sqrt(2)
 
-# Simulation
+# Simulation loop for different pilot lengths
+pilot_lengths = [10, 20, 30, 40]  # Example pilot lengths to test
 
-ue_loc = generate_user_locations(n_ue)  # Generate user locations 
-irs_positions = generate_irs_positions(irs_loc, n_rows, n_cols, d_irs)  # Generate IRS positions
-
-# Direct channel distance BS-UE
-d_bu = np.zeros(n_ue)  # Direct channel distance storage 
-
-for k in range(n_ue):     
-    d_bu[k] = calculate_distance(bs_loc, ue_loc[k])  # Direct channel distance calculation 
+for L0 in pilot_lengths:
+    print(f"Testing with pilot length: {L0}")
     
-d_bi = calculate_distance(bs_loc, irs_loc)  # Distance BS-IRS 
+    ue_loc = generate_user_locations(n_ue)  # Generate user locations 
+    irs_positions = generate_irs_positions(irs_loc, n_rows, n_cols, d_irs)  # Generate IRS positions
 
-d_iu = np.zeros(n_ue)  # Distance IRS-UE storage
+    d_bu = np.zeros(n_ue)  # Direct channel distance storage 
 
-for k in range(n_ue):
-    d_iu[k] = calculate_distance(irs_loc, ue_loc[k])  # Distance IRS-UE
+    for k in range(n_ue):     
+        d_bu[k] = calculate_distance(bs_loc, ue_loc[k])  # Direct channel distance calculation 
+    
+    d_bi = calculate_distance(bs_loc, irs_loc)  # Distance BS-IRS 
 
-# Path losses
-pl_bu = path_loss_direct(d_bu)  # direct channel path loss 
-pl_bi = path_loss_cascaded(d_bi)  # BS-IRS channel path loss
-pl_iu = path_loss_cascaded(d_iu)  # IRS-UE channel path loss 
-pl_cascaded = pl_bi + pl_iu  # total cascaded channel path loss
+    d_iu = np.zeros(n_ue)  # Distance IRS-UE storage
 
-pl_bu_linear = 10 ** (-pl_bu / 10)  # Linear scale direct channel path loss 
+    for k in range(n_ue):
+        d_iu[k] = calculate_distance(irs_loc, ue_loc[k])  # Distance IRS-UE
 
-# Channel coefficients calculation
+    # Path losses
+    pl_bu = path_loss_direct(d_bu)  # direct channel path loss 
+    pl_bi = path_loss_cascaded(d_bi)  # BS-IRS channel path loss
+    pl_iu = path_loss_cascaded(d_iu)  # IRS-UE channel path loss 
+    pl_cascaded = pl_bi + pl_iu  # total cascaded channel path loss
 
-# Direct Channel
-hkd = direct_channel(n_ue, n_uet, n_bs, pl_bu_linear)
+    pl_bu_linear = 10 ** (-pl_bu / 10)  # Linear scale direct channel path loss 
 
-# Compute IRS-to-UE channel matrix hkr
-hkr = IRS_UE_channel(n_ue, n_uet, n_irs, pl_iu, epsilon, irs_loc, ue_loc, d_irs, lambda_c, n_cols)
+    # Channel coefficients calculation
 
-# Compute the full BS-IRS channel matrix G
-d_bs = 0.5  # Assuming BS antenna spacing is lambda_c / 2
-g = BS_IRS_channel(n_irs, n_bs, pl_bi, epsilon, bs_loc, irs_loc, d_bs, d_irs, lambda_c, n_cols)
+    # Direct Channel
+    hkd = direct_channel(n_ue, n_uet, n_bs, pl_bu_linear)
+
+    # Compute IRS-to-UE channel matrix hkr
+    hkr = IRS_UE_channel(n_ue, n_uet, n_irs, pl_iu, epsilon, irs_loc, ue_loc, d_irs, lambda_c, n_cols)
+
+    # Compute the full BS-IRS channel matrix G
+    d_bs = 0.5  # Assuming BS antenna spacing is lambda_c / 2
+    g = BS_IRS_channel(n_irs, n_bs, pl_bi, epsilon, bs_loc, irs_loc, d_bs, d_irs, lambda_c, n_cols)
+
+    combined_channel = np.zeros(hkd.shape, dtype=complex)
+    for k in range(hkd.shape[0]):  # Loop over users
+        combined_channel[k, 0, :] = g @ hkr[k, 0, :]
+
+    # Simulate Uplink Pilot Transmission
+    tau = n_bs + 1  # Number of sub-frames
+    pilots = generate_orthogonal_pilots(n_ue, L0)  # Generate orthogonal pilots
+    noise_var = 1e-3  # Noise variance
+
+    # Simulate Uplink Pilot Transmission
+    Y = simulate_pilot_transmission(pilots, combined_channel, n_bs, L0, tau, noise_var)
+    
+    # Estimate the combined channel covariance matrix
+    combined_channel_covariance = np.cov(combined_channel.reshape(n_bs, -1))
+    
+    # Process the received pilots to estimate the channel
+    F_hat = process_received_pilots(Y, pilots, L0, tau)
+    # LMMSE Estimation
+    F_hat_lmmse = lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance)
+    
+    print(f"Estimated Channel Matrix F_hat for L0={L0} using LMMSE estimation:\n", F_hat_lmmse)
 
 
-        
+       
