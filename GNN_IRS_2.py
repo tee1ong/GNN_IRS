@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.linalg import dft
 
 # Number of BS antennas, IRS elements, and users
 n_bs = 8  # Number of BS antennas
@@ -29,7 +30,13 @@ d_irs = 0.5  # Distance between IRS elements - presumed
 
 # Generate orthogonal pilot sequences
 def generate_orthogonal_pilots(n_ue, L0):
-    pilots = np.fft.fft(np.eye(L0))[:n_ue].T  # Using DFT to generate orthogonal sequences
+    # Generate the DFT matrix of size L0 x L0
+    dft_matrix = dft(L0)
+    
+    # Slice to get the first n_ue columns (pilot sequences for the users)
+    pilots = dft_matrix[:, :n_ue]
+    
+    # Return the transpose so each column is a pilot sequence
     return pilots
 
 # Simulate the uplink pilot transmission and received signal at BS
@@ -214,7 +221,7 @@ def generate_nlos_component(n_bs, n_irs):
     return (np.random.randn(n_bs, n_irs) + 1j * np.random.randn(n_bs, n_irs)) / np.sqrt(2)
 
 # Simulation loop for different pilot lengths
-pilot_lengths = [10, 20, 30, 40]  # Example pilot lengths to test
+pilot_lengths = [10, 20]  # Example pilot lengths to test
 
 for L0 in pilot_lengths:
     print(f"Testing with pilot length: {L0}")

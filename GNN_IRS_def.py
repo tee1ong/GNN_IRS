@@ -50,6 +50,7 @@ def steering_vector(phi, theta, n, d_element, lambda_c, array_type='irs', n_cols
         raise ValueError("Invalid array_type. Choose 'irs' or 'bs'.")
     
     return np.exp(exponent)
+
 # Channel Coefficients
 # Direct Channel 
 def direct_channel(n_ue, n_uet, n_bs, beta_0):
@@ -135,14 +136,89 @@ def generate_phase_shifts(L, n_ue, n_ris):
     Q = q_dft[0:n_ris + 1, 0:tau]  # Truncate to the first τ rows and first N+1 columns
     return Q
 
- # Generate orthogonal pilots    
 def generate_orthogonal_pilots(n_ue, L0):
-    pilots = np.fft.fft(np.eye(L0))[:n_ue].T  # Using DFT to generate orthogonal sequences
-    return pilots
-
-# Pilot transmission
- def pilot_transmission(pilots, combined_channel, n_bs, L, L0)
+    # Generate the DFT matrix of size L0 x L0
+    dft_matrix = dft(L0)
     
+    # Slice to get the first n_ue columns (pilot sequences for the users)
+    pilots = dft_matrix[:, :n_ue]
+    
+    # Return the transpose so each column is a pilot sequence
+    return pilots.T
+
+def pilot_transmission(pilots, combined_channel, n_bs, n_ue, L0):
+    L0 = n_ue # number of symbols per subframe (L0 = K in the paper)
+    tau = L // L0 # number of subframes (τ = L / L0)
+    
+    Y = np.zeros((n_bs, n_ue, tau), dtype=complex)
+    
+    for t in range(tau):
+        for k in range(n_ue):
+            pilots_k = pilots[:, k].reshape(1, L0) # pilot sequence for user k
+            
+            # Pilots go through channel 
+            yk = combined_channel[k, 0, :].reshape(n_bs, 1) @ pilots_k
+            
+            Y[:, k, t] += np.sum(yk, axis=1)
+        Y[:, :, t] += np.sqrt(noise_var/2) * (np.random.randn(n_bs, n_ue) + 1j * np.random.randn(n_bs, n_ue))
+    return Y
+
+def process_received_pilots(Y, pilots, n_ue, L):
+    L0 = n_ue  # number of symbols per subframe (L0 = K in the paper)
+    tau = L // L0  # number of subframes (τ = L / L0)
+    
+    F_hat = np.zeros((Y.shape[0], pilots.shape[0]), dtype=complex)  # n_bs x n_ue
+    
+    for k in range(n_ue):  # Loop over each user
+        Y_k = Y[:, k, :]  # Extract the Y matrix corresponding to user k
+        
+        # Perform the estimation for user k
+        for t in range(tau):
+            Y_t = Y_k[:, t]  # Y_t is (n_bs,)
+            pilot_k_conj = np.conj(pilots[k, :])  # Get the pilot sequence for user k
+            
+            # Element-wise multiplication across the whole sequence
+            F_hat[:, k] += Y_t * pilot_k_conj[t % L0]
+    
+    F_hat /= tau
+    return F_hat
+
+def lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance):
+    """
+    Perform LMMSE channel estimation.
+
+    Y: Received pilot matrix at BS. (n_bs, n_ue, tau)
+    pilots: Transmitted pilot sequences. (n_ue, L0)
+    noise_var: Noise variance.
+    combined_channel_covariance: Covariance matrix of the combined channel.
+
+    Returns:
+    F_hat_lmmse: LMMSE estimate of the channel matrix.
+    """
+
+    n_bs, n_ue, tau = Y.shape
+    
+    # Flatten the Y matrix to use in matrix multiplication
+    Y_reshaped = Y.reshape(n_bs, n_ue * tau)  # (n_bs, n_ue * tau)
+    
+    # Reshape pilots matrix
+    pilots_reshaped = pilots.T  # (L0, n_ue)
+    
+    # Covariance matrix of the received signal Y
+    R_Y = combined_channel_covariance + noise_var * np.eye(combined_channel_covariance.shape[0])
+    
+    # Compute the mean of Y across subframes (axis=2)
+    E_Y = np.mean(Y_reshaped, axis=1, keepdims=True)  # (n_bs, 1)
+    
+    # LMMSE estimation
+    F_hat_lmmse = np.dot(np.dot(combined_channel_covariance, np.linalg.inv(R_Y)), (Y_reshaped - E_Y)) + E_Y
+    
+    # Reshape the result to match the expected dimensions
+    F_hat_lmmse = F_hat_lmmse.reshape(n_bs, n_ue, tau)
+    
+    return F_hat_lmmse
+
+
 
 ## System Setup
 # Object Size
@@ -156,7 +232,8 @@ Pt_down = 20  # Downlink transmit power
 Po_up = -100  # Uplink noise power
 Po_down = -65  # Downlink Noise Power 
 epsilon = 10  # Rician factor 
-lambda_c = 1  # Relative wavelength
+lambda_c = 1  # Relative wavelengt
+noise_var = (10**((Po_up)/10)) * 1e-3 
 # IRS configuration
 n_rows = 10  # Number of rows in the IRS panel
 n_cols = 10  # Number of columns in the IRS panel
@@ -170,38 +247,39 @@ n_cols = 10  # Number of columns in the IRS panel
 d_irs = 0.5  # Distance between IRS elements - presumed
 
 # Pilot configuration 
-pilot_lengths = [10, 20, 30]  # Example pilot lengths to test
+pilot_lengths = [10, 20]  # Example pilot lengths to test
 
 ## Simulation 
 
-for L0 in pilot_lengths: # testing alongt the range of pilot_lengths 
-    print(f"Testing with pilot length: {L0}")
+for L in pilot_lengths: # testing alongt the range of pilot_lengths 
+    print(f"Testing with pilot length: {L}")
+
 
     # Generate locations of users and IRS elements 
     ue_loc = generate_user_locations(n_ue)  # Generate user locations 
     irs_positions = generate_irs_positions(irs_loc, n_rows, n_cols, d_irs)  # Generate IRS positions
-
+    
     d_bu = np.zeros(n_ue)  # Direct channel distance storage 
-
+    
     for k in range(n_ue):     
         d_bu[k] = calculate_distance(bs_loc, ue_loc[k])  # Direct channel distance calculation 
     
     d_bi = calculate_distance(bs_loc, irs_loc)  # Distance BS-IRS 
-
+    
     d_iu = np.zeros(n_ue)  # Distance IRS-UE storage
     
     for k in range(n_ue):
         d_iu[k] = calculate_distance(irs_loc, ue_loc[k])  # Distance IRS-UE
         
-    
     # Path losses
     pl_bu = path_loss_direct(d_bu)  # direct channel path loss 
     pl_bi = path_loss_cascaded(d_bi)  # BS-IRS channel path loss
     pl_iu = path_loss_cascaded(d_iu)  # IRS-UE channel path loss 
     pl_cascaded = pl_bi + pl_iu  # total cascaded channel path loss
-
+    
     pl_bu_linear = 10 ** (-pl_bu / 10)  # Linear scale direct channel path loss 
-       
+    
+           
     # Channel coefficients calculation
     hkd = direct_channel(n_ue, n_uet, n_bs, pl_bu_linear) # Direct Channel
     hkr = IRS_UE_channel(n_ue, n_uet, n_irs, pl_iu, epsilon, irs_loc, ue_loc, d_irs, lambda_c, n_cols) # Compute IRS-to-UE channel matrix hkr
@@ -214,5 +292,13 @@ for L0 in pilot_lengths: # testing alongt the range of pilot_lengths
     for k in range(hkd.shape[0]):  # Loop over users
         combined_channel[k, 0, :] = G @ hkr[k, 0, :]
         
-    phase_shifts = generate_phase_shifts(L0, n_ue, n_irs)
-    pilots = generate_orthogonal_pilots(n_ue, L0)
+    phase_shifts = generate_phase_shifts(L, n_ue, n_irs)
+    pilots = generate_orthogonal_pilots(n_ue, L)
+    Y = pilot_transmission(pilots, combined_channel, n_bs, n_ue, L)
+ # Estimate the combined channel covariance matrix
+    combined_channel_covariance = np.cov(combined_channel.reshape(n_bs, -1))
+    F_hat_lmmse = lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance)
+    
+    print(f"Estimated Channel Matrix F_hat for L={L} using LMMSE estimation:\n", F_hat_lmmse)
+
+    
