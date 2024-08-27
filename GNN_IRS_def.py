@@ -43,13 +43,6 @@ def steering_vector(phi, theta, n, d_element, lambda_c, array_type='irs', n_cols
         raise ValueError("Invalid array_type. Choose 'irs' or 'bs'.")
     return np.exp(exponent)
 
-# Normalize Channel Function
-def normalize_channel(channel):
-    norm_factor = np.linalg.norm(channel)
-    if norm_factor > 0:
-        return channel / norm_factor
-    return channel
-
 # Generate Direct Channel
 def direct_channel(n_ue, n_uet, n_bs, beta_0):
     h = np.zeros((n_ue, n_uet, n_bs), dtype=complex)
@@ -57,7 +50,7 @@ def direct_channel(n_ue, n_uet, n_bs, beta_0):
         r_part = np.random.randn(n_uet, n_bs)
         i_part = np.random.randn(n_uet, n_bs)
         h[k, :, :] = ((r_part + 1j * i_part) / np.sqrt(2)) * beta_0[k]
-    return normalize_channel(h)
+    return h
 
 # Generate IRS-UE Channel
 def IRS_UE_channel(n_ue, n_uet, n_irs, beta_1, epsilon, irs_loc, ue_loc, d_irs, lambda_c, n_cols):
@@ -82,7 +75,7 @@ def IRS_UE_channel(n_ue, n_uet, n_irs, beta_1, epsilon, irs_loc, ue_loc, d_irs, 
     for k in range(n_ue):
         hkr[k, :, :] = beta_1[k] * (hkr_los[k, :, :] + hkr_nlos[k, :, :])
     
-    return normalize_channel(hkr)
+    return hkr
 
 # Generate BS-IRS Channel
 def BS_IRS_channel(n_irs, n_bs, beta_2, epsilon, bs_loc, irs_loc, d_bs, d_irs, lambda_c, n_cols):
@@ -97,7 +90,7 @@ def BS_IRS_channel(n_irs, n_bs, beta_2, epsilon, bs_loc, irs_loc, d_bs, d_irs, l
     g_nlos = generate_nlos_component(n_bs, n_irs)
     g_full = beta_2 * (np.sqrt(epsilon / (1 + epsilon)) * g_los + np.sqrt(1 / (1 + epsilon)) * g_nlos)
     
-    return normalize_channel(g_full)
+    return g_full
 
 # Generate NLOS Component for G
 def generate_nlos_component(n_bs, n_irs):
@@ -131,15 +124,18 @@ def generate_orthogonal_pilots(n_ue, L):
 
 
 def pilot_transmission(pilots, combined_channel, n_bs, n_ue, L):
-    L0 = pilots.shape[0]
-    tau = L // L0
+    L0 = pilots.shape[0]  # number of symbols per subframe (L0 = length of each pilot sequence)
+    tau = L // L0  # number of subframes
     
     Y = np.zeros((n_bs, n_ue, tau), dtype=complex)
     
     for t in range(tau):
         for k in range(n_ue):
-            pilots_k = pilots[:, k].reshape(L0, 1)
+            pilots_k = pilots[:, k].reshape(L0, 1)  # pilot sequence for user k, shape (L0, 1)
+            
+            # Pilots go through the channel
             yk = combined_channel[k, 0, :].reshape(n_bs, 1) @ pilots_k.T
+            
             Y[:, k, t] += np.sum(yk, axis=1)
         
         Y[:, :, t] += np.sqrt(noise_var / 2) * (np.random.randn(n_bs, n_ue) + 1j * np.random.randn(n_bs, n_ue))
@@ -157,9 +153,15 @@ def lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance):
     return F_hat_lmmse
 
 def calculate_mse(F_hat_lmmse, combined_channel):
-    combined_channel_transposed = np.transpose(combined_channel, (2, 0, 1))
+    combined_channel_transposed = np.transpose(combined_channel, (2, 0, 1))  # shape (n_bs, n_ue, 1)
     mse = np.mean(np.abs(F_hat_lmmse - combined_channel_transposed) ** 2)
     return mse
+
+def normalize_channel(channel):
+    norm_factor = np.linalg.norm(channel)
+    if norm_factor > 0:
+        return channel / norm_factor
+    return channel
 
 ## System Setup and Simulation
 n_bs = 8
@@ -178,7 +180,7 @@ n_cols = 10
 d_irs = 0.5
 bs_loc = np.array([100, -100, 0])
 irs_loc = np.array([0, 0, 0])
-pilot_lengths = [10, 20, 30, 40, 50, 60, 300]
+pilot_lengths = [10, 20]
 
 mse_errors = []  # List to store MSE for each pilot length
 
@@ -204,9 +206,14 @@ for L in pilot_lengths:
     pl_bu_linear = 10 ** (-pl_bu / 10)
     
     hkd = direct_channel(n_ue, n_uet, n_bs, pl_bu_linear)
+    hkd = normalize_channel(hkd)  # Normalize the direct channel
+
     hkr = IRS_UE_channel(n_ue, n_uet, n_irs, pl_iu, epsilon, irs_loc, ue_loc, d_irs, lambda_c, n_cols)
+    hkr = normalize_channel(hkr)  # Normalize the IRS-UE channel
+    
     d_bs = 0.5
     G = BS_IRS_channel(n_irs, n_bs, pl_bi, epsilon, bs_loc, irs_loc, d_bs, d_irs, lambda_c, n_cols)
+    G = normalize_channel(G)  # Normalize the BS-IRS channel
     
     combined_channel = np.zeros(hkd.shape, dtype=complex)
     for k in range(hkd.shape[0]):
@@ -215,7 +222,7 @@ for L in pilot_lengths:
     phase_shifts = generate_phase_shifts(L, n_ue, n_irs)
     pilots = generate_orthogonal_pilots(n_ue, L)
     Y = pilot_transmission(pilots, combined_channel, n_bs, n_ue, L)
-    combined_channel_covariance = np.cov(combined_channel.reshape(n_bs * n_ue, -1))
+    combined_channel_covariance = np.cov(combined_channel.reshape(n_bs, -1))
     F_hat_lmmse = lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance)
     
     mse = calculate_mse(F_hat_lmmse, combined_channel)
@@ -223,6 +230,3 @@ for L in pilot_lengths:
     print(f"Mean Squared Error for L={L}: {mse}")
 
 print(f"Final MSE errors across different pilot lengths: {mse_errors}")
-
-
-    
