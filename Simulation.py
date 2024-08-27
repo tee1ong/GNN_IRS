@@ -162,8 +162,6 @@ def lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance):
     F_hat_lmmse = F_hat_lmmse.reshape(n_bs, n_ue, tau)
     return F_hat_lmmse
 
-
-
 ## System Setup and Simulation
 n_bs = 8
 n_irs = 100
@@ -221,12 +219,10 @@ for L in pilot_lengths:
     combined_channel_covariance = np.cov(combined_channel.reshape(n_bs, -1))
     F_hat_lmmse = lmmse_estimation(Y, pilots, noise_var, combined_channel_covariance)
     
-    # Calculate NMSE for the combined channel
-    mse = np.mean(np.abs(F_hat_lmmse.reshape(-1) - combined_channel.reshape(-1))**2)
+    # Compute the MSE for the current pilot length
+    mse = np.mean(np.abs(F_hat_lmmse - combined_channel)**2)
     mse_errors.append(mse)
-
-    
-
+    print(f"Estimated MSE for L={L}: {mse}")
 
     
    # print(f"Estimated Channel Matrix F_hat for L={L} using LMMSE estimation:\n", F_hat_lmmse)
